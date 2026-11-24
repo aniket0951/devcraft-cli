@@ -200,7 +200,7 @@ func TestTest_UploadsSnapshotAndShowsPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("test: %v\n%s", err, out)
 	}
-	assertContains(t, out, "Packaged 1 files", "Evaluation eval_1: running", "Evaluation eval_1: completed", "PASSED", "score 10/10", "[PASS] build")
+	assertContains(t, out, "Packaged 1 files", "Evaluation eval_1: running", "Evaluation eval_1: completed", "PASS", "score 10/10", "✓ build")
 
 	upload := f.uploads["art_quick_evaluation"]
 	if got := tarNames(t, upload); !slices.Equal(got, []string{"main.go"}) {
@@ -227,7 +227,7 @@ func TestTest_FailedChecksExitNonZero(t *testing.T) {
 	if !errors.Is(err, errEvaluationFailed) {
 		t.Fatalf("err = %v, want errEvaluationFailed", err)
 	}
-	assertContains(t, out, "FAILED", "[FAIL] unit tests: expected 3, got 2", "Split the Store interface")
+	assertContains(t, out, "FAIL", "✗ unit tests", "→ expected 3, got 2", "Suggestions", "Split the Store interface")
 }
 
 func TestTest_InfraErrorIsNotLearnerFailure(t *testing.T) {
@@ -244,7 +244,7 @@ func TestTest_InfraErrorIsNotLearnerFailure(t *testing.T) {
 		t.Fatalf("err = %v, want errInfrastructure", err)
 	}
 	assertContains(t, out, "infrastructure problem: sandbox_start_failed", "worker unavailable")
-	if strings.Contains(out, "FAILED") {
+	if strings.Contains(out, "FAIL") {
 		t.Fatal("infra error must not be shown as a learner failure")
 	}
 }
@@ -280,7 +280,7 @@ func TestSubmit_VerifiedChecksumAndResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit: %v\n%s", err, out)
 	}
-	assertContains(t, out, "Submission sub_1 created", "Result (formal): PASSED")
+	assertContains(t, out, "Submission sub_1 created", "formal evaluation", "PASS")
 	if _, ok := f.uploads["art_submission"]; !ok {
 		t.Fatal("submission archive not uploaded")
 	}
@@ -296,7 +296,7 @@ func TestSubmit_NoWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContains(t, out, "devcraft results --submission sub_1")
-	if strings.Contains(out, "PASSED") {
+	if strings.Contains(out, "PASS") {
 		t.Fatal("--no-wait should not wait for results")
 	}
 }
@@ -333,7 +333,7 @@ func TestStatusAndResults(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: %v", args, err)
 		}
-		assertContains(t, out, "PASSED", "[PASS] build")
+		assertContains(t, out, "PASS", "✓ build")
 	}
 
 	if _, err := runCLI(t, f, "results", "--submission", "s", "--evaluation", "e"); err == nil {

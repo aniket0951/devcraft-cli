@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"time"
 
+	"github.com/aniket0951/devcraft-cli.git/internal/report"
 	"github.com/aniket0951/devcraft-cli.git/pkg/client"
 )
 
@@ -25,16 +27,17 @@ func waitForEvaluation(ctx context.Context, c *client.Client, id string, w io.Wr
 	ctx, cancel := context.WithTimeout(ctx, pollTimeout)
 	defer cancel()
 
-	var last client.EvaluationStatus
+	// On a terminal: one animated line. Otherwise: "Evaluation <id>: <status>"
+	// each time the status changes.
+	spin := report.NewSpinner(w, isTerminal(w), "Evaluation "+id)
+	defer spin.Stop()
+
 	for {
 		ev, err := c.GetEvaluation(ctx, id)
 		if err != nil {
 			return nil, apiError("get evaluation", err)
 		}
-		if ev.Status != last {
-			_, _ = fmt.Fprintf(w, "Evaluation %s: %s\n", ev.ID, ev.Status)
-			last = ev.Status
-		}
+		spin.Set(string(ev.Status))
 		if ev.Done() {
 			return ev, nil
 		}
@@ -93,60 +96,77 @@ func printEvaluation(w io.Writer, ev *client.Evaluation) error {
 		return nil
 	}
 
-	verdict := "FAILED"
-	if ev.Passed {
-		verdict = "PASSED"
+	title := "evaluation"
+	if ev.Kind != "" {
+		title = ev.Kind + " evaluation"
 	}
-	kind := ev.Kind
-	if kind == "" {
-		kind = "evaluation"
-	}
-	p("Result (%s): %s", kind, verdict)
-	if ev.MaxScore > 0 {
-		p("  score %s/%s", fmtNum(ev.Score), fmtNum(ev.MaxScore))
-	}
-	p("\n")
-
-	if len(ev.Checks) > 0 {
-		p("\nChecks:\n")
-		for _, ch := range ev.Checks {
-			label := map[string]string{
-				client.CheckPassed:  "PASS",
-				client.CheckFailed:  "FAIL",
-				client.CheckSkipped: "SKIP",
-			}[ch.Status]
-			if label == "" {
-				label = ch.Status
-			}
-			p("  [%s] %s", label, ch.Name)
-			if ch.Message != "" {
-				p(": %s", ch.Message)
-			}
-			p("\n")
-		}
+	live := report.NewLive(w, isTerminal(w), title, ev.ID)
+	for _, ch := range ev.Checks {
+		live.Done(checkResult(ch))
 	}
 
 	if len(ev.Rubric) > 0 {
-		p("\nRubric:\n")
+		items := make([]report.Item, 0, len(ev.Rubric))
 		for _, r := range ev.Rubric {
-			p("  %s: %s/%s\n", r.Criterion, fmtNum(r.Score), fmtNum(r.MaxScore))
-			if r.Evidence != "" {
-				p("    %s\n", r.Evidence)
-			}
+			items = append(items, report.Item{
+				Text: fmt.Sprintf("%s %s/%s", r.Criterion, fmtNum(r.Score), fmtNum(r.MaxScore)),
+				Sub:  r.Evidence,
+			})
 		}
+		live.Section("Rubric", items)
+	}
+	if len(ev.Suggestions) > 0 {
+		items := make([]report.Item, 0, len(ev.Suggestions))
+		for _, s := range ev.Suggestions {
+			items = append(items, report.Item{Text: "• " + s})
+		}
+		live.Section("Suggestions", items)
 	}
 
-	if len(ev.Suggestions) > 0 {
-		p("\nSuggestions:\n")
-		for _, s := range ev.Suggestions {
-			p("  - %s\n", s)
-		}
+	score := ""
+	if ev.MaxScore > 0 {
+		score = fmtNum(ev.Score) + "/" + fmtNum(ev.MaxScore)
 	}
+	var took time.Duration
+	if ev.CompletedAt != nil && !ev.CreatedAt.IsZero() {
+		took = ev.CompletedAt.Sub(ev.CreatedAt)
+	}
+	live.FinishWith(ev.Passed, score, took)
 
 	if !ev.Passed {
 		return errEvaluationFailed
 	}
 	return nil
+}
+
+// checkResult converts an API check into a report row. The API sends no
+// layer, so rows are shown as a flat list.
+func checkResult(ch client.Check) report.Result {
+	r := report.Result{Name: ch.Name}
+	switch ch.Status {
+	case client.CheckPassed:
+		r.Status, r.Note = report.Pass, ch.Message
+	case client.CheckFailed:
+		r.Status, r.Reason = report.Fail, ch.Message
+	case client.CheckSkipped:
+		r.Status, r.Note = report.Skipped, ch.Message
+	default: // unknown status from a newer API: show it, don't hide it
+		r.Status, r.Reason = report.Inconclusive, ch.Status
+		if ch.Message != "" {
+			r.Reason += ": " + ch.Message
+		}
+	}
+	return r
+}
+
+// isTerminal reports whether w is an interactive terminal (animations on).
+func isTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 func fmtNum(f float64) string {

@@ -132,8 +132,40 @@ func (l *Live) Done(r Result) {
 	l.writeRow(r)
 }
 
-// Finish prints the PASS/FAIL summary.
+// Finish prints the PASS/FAIL summary; the verdict is PASS when no row failed.
 func (l *Live) Finish(total time.Duration) {
+	l.mu.Lock()
+	passed := l.failed == 0
+	l.mu.Unlock()
+	l.FinishWith(passed, "", total)
+}
+
+// Item is one line of a Section, with an optional dimmed line under it.
+type Item struct {
+	Text string
+	Sub  string
+}
+
+// Section prints a titled block of lines (e.g. rubric, suggestions).
+func (l *Live) Section(title string, items []Item) {
+	l.stopSpinner()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	bar := dim.Render("│")
+	fmt.Fprintln(l.w, "\n "+violet.Render(title))
+	for _, it := range items {
+		fmt.Fprintf(l.w, " %s %s\n", bar, it.Text)
+		if it.Sub != "" {
+			fmt.Fprintf(l.w, " %s   %s\n", bar, dim.Render(it.Sub))
+		}
+	}
+}
+
+// FinishWith prints the summary with an explicit verdict (e.g. from an API
+// that decides pass/fail itself). score is shown when non-empty; the Time
+// line is shown when total > 0.
+func (l *Live) FinishWith(passed bool, score string, total time.Duration) {
 	l.stopSpinner()
 
 	l.mu.Lock()
@@ -142,7 +174,7 @@ func (l *Live) Finish(total time.Duration) {
 		fmt.Fprint(l.w, clearLine) // a stage started but never reported (evaluator error)
 	}
 	status := passTag.Render("PASS")
-	if l.failed > 0 {
+	if !passed {
 		status = failTag.Render("FAIL")
 	}
 	failStr := fmt.Sprintf("%d failed", l.failed)
@@ -151,10 +183,16 @@ func (l *Live) Finish(total time.Duration) {
 	} else {
 		failStr = dim.Render(failStr)
 	}
-	fmt.Fprintf(l.w, "\n %s  %s %s %s %s\n", status,
+	scoreStr := ""
+	if score != "" {
+		scoreStr = "  " + bold.Render("score "+score)
+	}
+	fmt.Fprintf(l.w, "\n %s  %s %s %s %s%s\n", status,
 		green.Render(fmt.Sprintf("%d passed", l.passed)), dim.Render("·"), failStr,
-		dim.Render(fmt.Sprintf("· %d inconclusive · %d skipped", l.inconc, l.skipped)))
-	fmt.Fprintln(l.w, dim.Render(" Time  "+fmtDur(total)))
+		dim.Render(fmt.Sprintf("· %d inconclusive · %d skipped", l.inconc, l.skipped)), scoreStr)
+	if total > 0 {
+		fmt.Fprintln(l.w, dim.Render(" Time  "+fmtDur(total)))
+	}
 }
 
 func (l *Live) spin(stop <-chan struct{}, stopped chan<- struct{}) {
@@ -196,7 +234,7 @@ func (l *Live) drawSpinner() {
 
 // header prints the level title the first time the level appears. Caller holds mu.
 func (l *Live) header(level string) {
-	if l.levels[level] {
+	if level == "" || l.levels[level] { // no level: flat list, no header
 		return
 	}
 	l.levels[level] = true
