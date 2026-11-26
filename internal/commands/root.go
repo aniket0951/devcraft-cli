@@ -26,6 +26,7 @@ func NewRootCmd() *cobra.Command {
 		logoutCmd(),
 		assignmentsCmd(),
 		startCmd(),
+		pathCmd(),
 		testCmd(),
 		submitCmd(),
 		statusCmd(),

@@ -74,7 +74,8 @@ func waitForSubmissionEvaluation(ctx context.Context, c *client.Client, id strin
 }
 
 // printEvaluation renders an evaluation and returns an error if it did not
-// pass, so the command exits non-zero.
+// pass, so the command exits non-zero. The error is a reportedError: the
+// report already says what happened, so railRun adds nothing.
 func printEvaluation(w io.Writer, ev *client.Evaluation) error {
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 
@@ -89,7 +90,8 @@ func printEvaluation(w io.Writer, ev *client.Evaluation) error {
 		if ev.InfraError != nil && ev.InfraError.Message != "" {
 			p("  %s\n", ev.InfraError.Message)
 		}
-		return errInfrastructure
+		p("This is not a failure of your solution; please try again in a few minutes.\n")
+		return &reportedError{errInfrastructure}
 	case client.EvaluationCompleted:
 	default:
 		p("Evaluation %s is %s. Check again later with `devcraft results --evaluation %s`.\n", ev.ID, ev.Status, ev.ID)
@@ -134,7 +136,7 @@ func printEvaluation(w io.Writer, ev *client.Evaluation) error {
 	live.FinishWith(ev.Passed, score, took)
 
 	if !ev.Passed {
-		return errEvaluationFailed
+		return &reportedError{errEvaluationFailed}
 	}
 	return nil
 }

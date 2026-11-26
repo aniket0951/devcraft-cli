@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"context"
+
+	"github.com/aniket0951/devcraft-cli.git/internal/ui"
 	"github.com/aniket0951/devcraft-cli.git/pkg/client"
 	"github.com/spf13/cobra"
 )
@@ -15,17 +18,15 @@ func submitCmd() *cobra.Command {
 			"creates a formal submission. The evaluator grades exactly that snapshot.",
 		Example: "  devcraft submit\n  devcraft submit --no-wait",
 		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: railRun("submit", func(ctx context.Context, cmd *cobra.Command, p *ui.Printer, args []string) error {
 			ws, err := findWorkspace()
 			if err != nil {
 				return err
 			}
-			c, err := newAPIClient(cmd)
+			c, err := newAPIClient(ctx, cmd, p)
 			if err != nil {
 				return err
 			}
-			ctx, stop := commandContext(cmd)
-			defer stop()
 
 			cmd.Printf("Submitting %s (attempt %s)\n", ws.Metadata.AssignmentID, ws.Metadata.AttemptID)
 			snap, err := uploadSnapshot(ctx, cmd, c, ws, client.PurposeSubmission)
@@ -55,7 +56,7 @@ func submitCmd() *cobra.Command {
 				return err
 			}
 			return printEvaluation(cmd.OutOrStdout(), ev)
-		},
+		}),
 	}
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "do not wait for the evaluation to finish")
 	cmd.Flags().Bool(allowSecretsFlag, false, "upload even if files look like they contain secrets")

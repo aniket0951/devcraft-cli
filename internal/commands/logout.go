@@ -1,10 +1,12 @@
 package commands
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"github.com/aniket0951/devcraft-cli.git/internal/auth"
+	"github.com/aniket0951/devcraft-cli.git/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -14,12 +16,13 @@ func logoutCmd() *cobra.Command {
 		Short:   "Log out of DevCraft and remove stored credentials",
 		Example: "devcraft logout",
 		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: railRun("sign out", func(_ context.Context, cmd *cobra.Command, p *ui.Printer, _ []string) error {
+			p.Tag("AUTH", "Sign out")
 			handler := auth.NewAuthHandler()
 
 			session, err := handler.LoadLogin()
 			if errors.Is(err, auth.ErrNotLoggedIn) {
-				cmd.Println("You are not logged in.")
+				p.Warn("You're not signed in")
 				return nil
 			}
 			if err != nil {
@@ -28,15 +31,15 @@ func logoutCmd() *cobra.Command {
 			}
 
 			if err := handler.DeleteLogin(); err != nil {
-				return fmt.Errorf("logout: %w", err)
+				return fmt.Errorf("remove saved login: %w", err)
 			}
 
 			if session != nil && session.Email != "" {
-				cmd.Printf("Logged out %s\n", session.Email)
+				p.OK("Signed out " + ui.Bold(session.Email))
 			} else {
-				cmd.Println("Logged out")
+				p.OK("Signed out")
 			}
 			return nil
-		},
+		}),
 	}
 }

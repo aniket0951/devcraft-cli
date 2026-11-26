@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"context"
+
+	"github.com/aniket0951/devcraft-cli.git/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -10,24 +13,22 @@ func statusCmd() *cobra.Command {
 		Short:   "Show the status of the current attempt and its latest submission",
 		Example: "  devcraft status",
 		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: railRun("show status", func(ctx context.Context, cmd *cobra.Command, p *ui.Printer, args []string) error {
 			ws, err := findWorkspace()
 			if err != nil {
 				return err
 			}
-			c, err := newAPIClient(cmd)
+			c, err := newAPIClient(ctx, cmd, p)
 			if err != nil {
 				return err
 			}
-			ctx, stop := commandContext(cmd)
-			defer stop()
 
 			attempt, err := c.GetAttempt(ctx, ws.Metadata.AttemptID)
 			if err != nil {
 				return apiError("get attempt", err)
 			}
 
-			cmd.Printf("Assignment:  %s (version %d)\n", ws.Metadata.AssignmentID, ws.Metadata.AssignmentVersion)
+			cmd.Printf("Assignment:  %s (version %s)\n", ws.Metadata.AssignmentID, ws.Metadata.AssignmentVersion)
 			cmd.Printf("Attempt:     %s (%s)\n", attempt.ID, attempt.Status)
 			cmd.Printf("Workspace:   %s\n", ws.Root)
 
@@ -61,6 +62,6 @@ func statusCmd() *cobra.Command {
 			}
 			cmd.Printf("Evaluation:  %s (%s, %s)\n", ev.ID, ev.Kind, summary)
 			return nil
-		},
+		}),
 	}
 }

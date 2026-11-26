@@ -1,8 +1,10 @@
 package commands
 
 import (
+	"context"
 	"errors"
 
+	"github.com/aniket0951/devcraft-cli.git/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -16,7 +18,7 @@ func resultsCmd() *cobra.Command {
 			"  devcraft results --submission sub_123\n" +
 			"  devcraft results --evaluation eval_123",
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: railRun("show results", func(ctx context.Context, cmd *cobra.Command, p *ui.Printer, args []string) error {
 			if submissionID != "" && evaluationID != "" {
 				return errors.New("use only one of --submission and --evaluation")
 			}
@@ -31,12 +33,10 @@ func resultsCmd() *cobra.Command {
 				attemptID = ws.Metadata.AttemptID
 			}
 
-			c, err := newAPIClient(cmd)
+			c, err := newAPIClient(ctx, cmd, p)
 			if err != nil {
 				return err
 			}
-			ctx, stop := commandContext(cmd)
-			defer stop()
 
 			switch {
 			case evaluationID != "":
@@ -67,7 +67,7 @@ func resultsCmd() *cobra.Command {
 				return apiError("get evaluation", err)
 			}
 			return printEvaluation(cmd.OutOrStdout(), ev)
-		},
+		}),
 	}
 	cmd.Flags().StringVar(&submissionID, "submission", "", "show results for this submission ID")
 	cmd.Flags().StringVar(&evaluationID, "evaluation", "", "show results for this evaluation ID")

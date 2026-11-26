@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -88,24 +87,29 @@ func hasStatus(err error, code int) bool {
 	return errors.As(err, &apiErr) && apiErr.StatusCode == code
 }
 
-// ListAssignments returns one page of published assignments.
-func (c *Client) ListAssignments(ctx context.Context, p ListAssignmentsParams) (*AssignmentList, error) {
+// ListAssignments returns the published assignments matching p, by category
+// then code.
+func (c *Client) ListAssignments(ctx context.Context, p ListAssignmentsParams) ([]Assignment, error) {
 	q := url.Values{}
 	setIf(q, "language", p.Language)
 	setIf(q, "category", p.Category)
-	setIf(q, "difficulty", p.Difficulty)
-	setIf(q, "cursor", p.Cursor)
-	if p.Limit > 0 {
-		q.Set("limit", strconv.Itoa(p.Limit))
-	}
-	var out AssignmentList
-	return &out, c.do(ctx, http.MethodGet, pathAssignments, q, nil, &out)
+	setIf(q, "level", p.Level)
+	var out []Assignment
+	return out, c.do(ctx, http.MethodGet, pathAssignments, q, nil, &out)
 }
 
 // GetAssignment returns one assignment.
 func (c *Client) GetAssignment(ctx context.Context, id string) (*Assignment, error) {
 	var out Assignment
 	return &out, c.do(ctx, http.MethodGet, pathf(pathAssignment, id), nil, nil, &out)
+}
+
+// GetAssignmentDownload returns a short-lived download URL for the current
+// version of a published assignment, with the size and SHA-256 the
+// downloaded ZIP must match.
+func (c *Client) GetAssignmentDownload(ctx context.Context, code string) (*AssignmentDownload, error) {
+	var out AssignmentDownload
+	return &out, c.do(ctx, http.MethodGet, pathf(pathAssignmentDownload, code), nil, nil, &out)
 }
 
 // CreateAttempt starts an attempt on an assignment. The response carries a
@@ -174,7 +178,7 @@ func (c *Client) UploadArtifact(ctx context.Context, u *UploadURL, body io.Reade
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("upload artifact: %w", err)
+		return fmt.Errorf("upload artifact: %w", stripURL(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -198,7 +202,7 @@ func (c *Client) Download(ctx context.Context, rawURL string, w io.Writer, maxBy
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("download: %w", err)
+		return 0, fmt.Errorf("download: %w", stripURL(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -209,7 +213,7 @@ func (c *Client) Download(ctx context.Context, rawURL string, w io.Writer, maxBy
 	}
 	n, err := io.Copy(w, io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
-		return n, fmt.Errorf("download: %w", err)
+		return n, fmt.Errorf("download: %w", stripURL(err))
 	}
 	if n > maxBytes {
 		return n, ErrDownloadTooLarge
@@ -266,27 +270,52 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if out == nil || len(data) == 0 {
 		return nil
 	}
-	if err := json.Unmarshal(data, out); err != nil {
+	// Every API response is an envelope: {"status_code", "message", "data", "error"}.
+	var env struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(data, &env); err != nil {
+		return fmt.Errorf("decode response from %s: %w", path, err)
+	}
+	if len(env.Data) == 0 || string(env.Data) == "null" {
+		return fmt.Errorf("decode response from %s: no data in response", path)
+	}
+	if err := json.Unmarshal(env.Data, out); err != nil {
 		return fmt.Errorf("decode response from %s: %w", path, err)
 	}
 	return nil
 }
 
-// parseAPIError reads an error body of the form
-// {"error": {"code": "...", "message": "..."}}, falling back to the status.
+// parseAPIError reads the error envelope
+// {"message": "...", "error": {"err_code": "...", "err_msg": "..."}},
+// falling back to the top-level message and then the status.
 func parseAPIError(status int, data []byte) error {
 	var body struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
+		Message string `json:"message"`
+		Error   struct {
+			Code    string `json:"err_code"`
+			Message string `json:"err_msg"`
 		} `json:"error"`
 	}
 	apiErr := &APIError{StatusCode: status}
 	if json.Unmarshal(data, &body) == nil {
 		apiErr.Code = body.Error.Code
 		apiErr.Message = body.Error.Message
+		if apiErr.Message == "" {
+			apiErr.Message = body.Message
+		}
 	}
 	return apiErr
+}
+
+// stripURL drops the URL from a *url.Error so a pre-signed URL (a bearer
+// capability) never ends up in an error message.
+func stripURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 func pathf(format, id string) string {

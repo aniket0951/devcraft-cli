@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -23,13 +24,25 @@ type uploadedSnapshot struct {
 	FileCount  int
 }
 
-// findWorkspace locates the workspace containing the current directory.
+// errNoAttempt is returned for workspaces created before the API tracks
+// attempts: testing and submitting need one.
+var errNoAttempt = errors.New("this workspace has no attempt yet: testing, submitting and results are not available for it")
+
+// findWorkspace locates the workspace containing the current directory. Every
+// caller needs an attempt, so a workspace without one is an error.
 func findWorkspace() (*workspace.Workspace, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	return workspace.Find(wd)
+	ws, err := workspace.Find(wd)
+	if err != nil {
+		return nil, err
+	}
+	if ws.Metadata.AttemptID == "" {
+		return nil, errNoAttempt
+	}
+	return ws, nil
 }
 
 // uploadSnapshot archives the workspace and uploads it for the given purpose.

@@ -2,7 +2,9 @@ package commands
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aniket0951/devcraft-cli.git/internal/config"
+
 	"github.com/aniket0951/devcraft-cli.git/internal/auth"
 	"github.com/aniket0951/devcraft-cli.git/internal/workspace"
 	"github.com/aniket0951/devcraft-cli.git/pkg/client"
@@ -29,9 +33,13 @@ type fakeAPI struct {
 	srv *httptest.Server
 
 	mu              sync.Mutex
-	starter         []byte
-	starterChecksum string
-	attemptsCreated int
+	starter         []byte            // starter ZIP served at download_url
+	starterChecksum string            // sha256_hex the API reports
+	starterSize     int64             // size_bytes the API reports
+	downloadCalls   int               // authorised GET /v1/assignments/{code}/download requests
+	requests        int               // every request to an authenticated route, accepted or not
+	downloadURL     string            // overrides the starter download_url when set
+	storage         http.HandlerFunc  // overrides how the starter ZIP is served when set
 	uploads         map[string][]byte // artifact ID -> archive
 	uploadAuth      []string          // Authorization headers seen on uploads
 	evaluation      client.Evaluation // returned for every evaluation
@@ -52,34 +60,43 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			Checks: []client.Check{{Name: "build", Status: client.CheckPassed}},
 		},
 	}
-	f.starter = makeTarGz(t, map[string]string{"README.md": "# Starter", "main.go": "package main\n"})
+	f.starter = makeZip(t, map[string]string{
+		"GO-SOLID-001/README.md": "# Starter",
+		"GO-SOLID-001/main.go":   "package main\n",
+	})
 	sum := sha256.Sum256(f.starter)
 	f.starterChecksum = hex.EncodeToString(sum[:])
+	f.starterSize = int64(len(f.starter))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/assignments", f.authed(func(w http.ResponseWriter, r *http.Request) {
-		items := []client.Assignment{
-			{ID: "GO-SOLID-001", Title: "SOLID in Go", Language: "go", Category: "design", Difficulty: "medium"},
-			{ID: "GO-CONC-002", Title: "Concurrency", Language: "go", Category: "concurrency", Difficulty: "hard"},
+		q := r.URL.Query()
+		items := []client.Assignment{}
+		for _, a := range []client.Assignment{
+			{Code: "GO-CONC-002", Name: "Worker pool", Language: "go", CategoryName: "Concurrency", Level: "L2", CurrentVersion: "1.0.0"},
+			{Code: "GO-SOLID-001", Name: "SOLID in Go", Language: "go", CategoryName: "SOLID Principles", Level: "L1", CurrentVersion: "1.2.0"},
+		} {
+			if (q.Get("language") == "" || q.Get("language") == a.Language) &&
+				(q.Get("category") == "" || strings.EqualFold(q.Get("category"), a.CategoryName)) &&
+				(q.Get("level") == "" || strings.EqualFold(q.Get("level"), a.Level)) {
+				items = append(items, a)
+			}
 		}
-		if lang := r.URL.Query().Get("language"); lang != "" && lang != "go" {
-			items = nil
-		}
-		writeJSON(w, http.StatusOK, client.AssignmentList{Items: items, NextCursor: r.URL.Query().Get("limit")})
+		writeJSON(w, http.StatusOK, items)
 	}))
-	mux.HandleFunc("POST /v1/attempts", f.authed(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body["assignment_id"] != "GO-SOLID-001" {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"code": "not_found", "message": "assignment not found"}})
+	mux.HandleFunc("GET /v1/assignments/{code}/download", f.authed(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.downloadCalls++
+		if strings.ToUpper(r.PathValue("code")) != "GO-SOLID-001" {
+			writeAPIError(w, http.StatusNotFound, "NOT_FOUND_ERR", "assignment not found")
 			return
 		}
-		f.mu.Lock()
-		f.attemptsCreated++
-		f.mu.Unlock()
-		writeJSON(w, http.StatusCreated, client.Attempt{
-			ID: "att_1", AssignmentID: "GO-SOLID-001", AssignmentVersion: 3, Status: "in_progress",
-			StarterURL: f.srv.URL + "/storage/starter.tar.gz", StarterChecksum: f.starterChecksum,
+		writeJSON(w, http.StatusOK, client.AssignmentDownload{
+			AssignmentCode: "GO-SOLID-001", Version: "1.2.0",
+			DownloadURL: cmp.Or(f.downloadURL, f.srv.URL+"/storage/starter.zip?X-Amz-Signature=secret"),
+			SizeBytes:   f.starterSize, SHA256Hex: f.starterChecksum,
+			ExpiresAt: time.Now().Add(5 * time.Minute),
 		})
 	}))
 	mux.HandleFunc("GET /v1/attempts/{id}", f.authed(func(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +107,16 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			LatestEvaluationID: f.latestEvalID, LatestSubmissionID: f.latestSubID,
 		})
 	}))
-	mux.HandleFunc("GET /storage/starter.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /storage/starter.zip", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Error("API token must not be sent to the download URL")
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.storage != nil {
+			f.storage(w, r)
+			return
+		}
 		_, _ = w.Write(f.starter)
 	})
 	mux.HandleFunc("POST /v1/artifacts/upload-url", f.authed(func(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +152,7 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 		// Verify the checksum against what was uploaded, like the real API should.
 		sum := sha256.Sum256(f.uploads[body["artifact_id"]])
 		if hex.EncodeToString(sum[:]) != body["checksum"] {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "checksum_mismatch"}})
+			writeAPIError(w, http.StatusBadRequest, "UNPROCESSABLE_ERR", "checksum mismatch")
 			return
 		}
 		f.latestSubID = "sub_1"
@@ -155,33 +181,48 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 func (f *fakeAPI) authed(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
+		f.requests++
 		unauthorized := f.unauthorized
 		f.mu.Unlock()
 		if unauthorized || r.Header.Get("Authorization") != "Bearer test-token" {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"code": "unauthorized"}})
+			writeAPIError(w, http.StatusUnauthorized, "UNAUTHORIZED_ERR", "invalid token")
 			return
 		}
 		h(w, r)
 	}
 }
 
+// writeJSON writes v as the data of a success envelope, like the real API.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(map[string]any{"status_code": status, "message": "ok", "data": v})
 }
 
-func makeTarGz(t *testing.T, files map[string]string) []byte {
+// writeAPIError writes the API's error envelope.
+func writeAPIError(w http.ResponseWriter, status int, code, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status_code": status, "message": msg,
+		"error": map[string]string{"err_code": code, "err_msg": msg, "debug_mes": msg},
+	})
+}
+
+func makeZip(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
+	zw := zip.NewWriter(&buf)
 	for name, content := range files {
-		_ = tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: int64(len(content)), Mode: 0o644})
-		_, _ = tw.Write([]byte(content))
+		fw, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = fw.Write([]byte(content))
 	}
-	_ = tw.Close()
-	_ = gz.Close()
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return buf.Bytes()
 }
 
@@ -241,7 +282,7 @@ func fastPolling(t *testing.T) {
 func newWorkspace(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := workspace.Write(root, workspace.Metadata{AssignmentID: "GO-SOLID-001", AssignmentVersion: 3, AttemptID: "att_1"}); err != nil {
+	if err := workspace.Write(root, workspace.Metadata{AssignmentID: "GO-SOLID-001", AssignmentVersion: "1.2.0", AttemptID: "att_1"}); err != nil {
 		t.Fatal(err)
 	}
 	for name, content := range files {
@@ -262,4 +303,14 @@ func assertContains(t *testing.T, s string, subs ...string) {
 			t.Errorf("output missing %q\n--- output ---\n%s", sub, s)
 		}
 	}
+}
+
+// chdirAssignments makes a temp folder the assignments folder (through
+// DEVCRAFT_ASSIGNMENTS_DIR) and the current directory, and returns it.
+func chdirAssignments(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv(config.EnvAssignmentsDir, dir)
+	t.Chdir(dir)
+	return dir
 }

@@ -10,15 +10,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"os/exec"
-	"os/signal"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/aniket0951/devcraft-cli.git/internal/auth"
 	"github.com/aniket0951/devcraft-cli.git/internal/constants"
+	"github.com/aniket0951/devcraft-cli.git/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -42,29 +40,21 @@ func loginCmd() *cobra.Command {
 		SuggestFor: []string{"do devcraft login"},
 		Short:      "Authentication for DevCraft",
 		Example:    "devcraft login",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-			defer stop()
-
-			ctx, cancel := context.WithTimeout(ctx, loginTimeout)
-			defer cancel()
-
-			session, err := browserLogin(ctx, cmd)
-			if err != nil {
+		RunE: railRun("sign in", func(ctx context.Context, cmd *cobra.Command, p *ui.Printer, _ []string) error {
+			p.Tag("AUTH", "Sign in to DevCraft")
+			if _, err := signInInline(ctx, p); err != nil {
 				return err
 			}
-
-			if err := auth.NewAuthHandler().SaveLogin(*session); err != nil {
-				return fmt.Errorf("save login: %w", err)
-			}
-
-			cmd.Printf("Logged in as %s (%s)\n", session.Name, session.Email)
+			p.Done("devcraft assignments", ui.Dim("see what you can start"))
 			return nil
-		},
+		}),
 	}
 }
 
-func browserLogin(ctx context.Context, cmd *cobra.Command) (*auth.Session, error) {
+// browserLoginWith opens the sign-in page and waits for its callback.
+// onOpen is called once, after trying to open the browser (openErr is
+// non-nil if that failed), before waiting.
+func browserLoginWith(ctx context.Context, onOpen func(loginURL string, openErr error)) (*auth.Session, error) {
 	state, err := randomState()
 	if err != nil {
 		return nil, fmt.Errorf("generate state: %w", err)
@@ -135,10 +125,7 @@ func browserLogin(ctx context.Context, cmd *cobra.Command) (*auth.Session, error
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	cmd.Printf("Opening browser for login. If it doesn't open, visit:\n%s\n", loginURL)
-	if err := openBrowserFn(loginURL); err != nil {
-		cmd.PrintErrf("could not open browser: %v\n", err)
-	}
+	onOpen(loginURL, openBrowserFn(loginURL))
 
 	select {
 	case res := <-resultCh:

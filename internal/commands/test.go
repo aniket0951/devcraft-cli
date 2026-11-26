@@ -1,6 +1,9 @@
 package commands
 
 import (
+	"context"
+
+	"github.com/aniket0951/devcraft-cli.git/internal/ui"
 	"github.com/aniket0951/devcraft-cli.git/pkg/client"
 	"github.com/spf13/cobra"
 )
@@ -13,17 +16,15 @@ func testCmd() *cobra.Command {
 			"and runs a quick evaluation in DevCraft's isolated environment.",
 		Example: "  devcraft test",
 		Args:    cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: railRun("run tests", func(ctx context.Context, cmd *cobra.Command, p *ui.Printer, args []string) error {
 			ws, err := findWorkspace()
 			if err != nil {
 				return err
 			}
-			c, err := newAPIClient(cmd)
+			c, err := newAPIClient(ctx, cmd, p)
 			if err != nil {
 				return err
 			}
-			ctx, stop := commandContext(cmd)
-			defer stop()
 
 			cmd.Printf("Testing %s (attempt %s)\n", ws.Metadata.AssignmentID, ws.Metadata.AttemptID)
 			snap, err := uploadSnapshot(ctx, cmd, c, ws, client.PurposeQuickEvaluation)
@@ -41,7 +42,7 @@ func testCmd() *cobra.Command {
 				}
 			}
 			return printEvaluation(cmd.OutOrStdout(), ev)
-		},
+		}),
 	}
 	cmd.Flags().Bool(allowSecretsFlag, false, "upload even if files look like they contain secrets")
 	return cmd

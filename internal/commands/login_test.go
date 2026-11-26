@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/aniket0951/devcraft-cli.git/internal/auth"
+	"github.com/aniket0951/devcraft-cli.git/internal/config"
+	"github.com/aniket0951/devcraft-cli.git/internal/ui"
 	"github.com/spf13/cobra"
 	"github.com/zalando/go-keyring"
 )
@@ -24,6 +26,7 @@ func setupTestEnv(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	t.Setenv("AppData", filepath.Join(home, "AppData"))
+	t.Setenv(config.EnvAssignmentsDir, "") // a real one would leak into tests
 }
 
 // fakeBrowser replaces openBrowserFn with a function that plays the role of
@@ -183,12 +186,13 @@ func TestBrowserLogin_BrowserOpenFailsStillWorks(t *testing.T) {
 		_ = callback(u) // user opened the printed URL manually
 		return errors.New("no browser")
 	}
-	cmd, out := newTestCmd()
+	setupTestEnv(t)
+	out := &bytes.Buffer{}
 
-	if _, err := browserLogin(testCtx(t), cmd); err != nil {
-		t.Fatalf("browserLogin: %v", err)
+	if _, err := signInInline(testCtx(t), ui.New(out, strings.NewReader(""))); err != nil {
+		t.Fatalf("signInInline: %v", err)
 	}
-	if !strings.Contains(out.String(), "could not open browser") {
+	if !strings.Contains(out.String(), "! Couldn't open your browser; open this link to sign in:") {
 		t.Fatalf("expected browser warning in output, got %q", out.String())
 	}
 	if !strings.Contains(out.String(), "http://localhost:3000/login") {
@@ -235,7 +239,7 @@ func TestLoginCmd_StoresSession(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("login: %v", err)
 	}
-	if !strings.Contains(out.String(), "Logged in as Test User (user@example.com)") {
+	if !strings.Contains(out.String(), "✓ Signed in as user@example.com") || !strings.Contains(out.String(), "DONE") {
 		t.Fatalf("unexpected output: %q", out.String())
 	}
 	if strings.Contains(out.String(), "id-token-123") {
@@ -266,4 +270,9 @@ func TestLoginCmd_FailureStoresNothing(t *testing.T) {
 	if _, err := auth.NewAuthHandler().LoadLogin(); !errors.Is(err, auth.ErrNotLoggedIn) {
 		t.Fatalf("LoadLogin err = %v, want ErrNotLoggedIn", err)
 	}
+}
+
+// browserLogin runs the sign-in flow without printing anything.
+func browserLogin(ctx context.Context, _ *cobra.Command) (*auth.Session, error) {
+	return browserLoginWith(ctx, func(string, error) {})
 }

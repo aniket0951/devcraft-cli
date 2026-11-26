@@ -10,7 +10,7 @@ import (
 
 func TestWriteAndFindFromSubdir(t *testing.T) {
 	root := t.TempDir()
-	m := Metadata{AssignmentID: "GO-SOLID-001", AssignmentVersion: 2, AttemptID: "att_1"}
+	m := Metadata{AssignmentID: "GO-SOLID-001", AssignmentVersion: "1.2.0", AttemptID: "att_1"}
 	if err := Write(root, m); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,38 @@ func TestWrite_RequiresIDs(t *testing.T) {
 	if err := Write(t.TempDir(), Metadata{AttemptID: "x"}); err == nil {
 		t.Fatal("expected error for missing assignment_id")
 	}
-	if err := Write(t.TempDir(), Metadata{AssignmentID: "x"}); err == nil {
-		t.Fatal("expected error for missing attempt_id")
+}
+
+func TestWrite_AttemptIDOptional(t *testing.T) {
+	root := t.TempDir()
+	if err := Write(root, Metadata{AssignmentID: "GO-SRP-01", AssignmentVersion: "1.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, DirName, MetadataFile))
+	if strings.Contains(string(data), "attempt_id") {
+		t.Fatalf("empty attempt_id should be omitted: %s", data)
+	}
+	ws, err := Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws.Metadata.AssignmentVersion != "1.0.0" || ws.Metadata.AttemptID != "" {
+		t.Fatalf("metadata = %+v", ws.Metadata)
+	}
+}
+
+func TestLoad_OnlyLooksAtRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := Write(root, Metadata{AssignmentID: "GO-SRP-01", AssignmentVersion: "1.0.0"}); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := Load(root)
+	if err != nil || ws.Metadata.AssignmentID != "GO-SRP-01" {
+		t.Fatalf("ws=%+v err=%v", ws, err)
+	}
+	sub := filepath.Join(root, "internal")
+	_ = os.Mkdir(sub, 0o755)
+	if _, err := Load(sub); !errors.Is(err, ErrNotWorkspace) {
+		t.Fatalf("subfolder: err = %v, want ErrNotWorkspace", err)
 	}
 }

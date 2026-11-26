@@ -26,7 +26,7 @@ func runLogout(t *testing.T) string {
 func TestLogout_NotLoggedIn(t *testing.T) {
 	setupTestEnv(t)
 
-	if out := runLogout(t); !strings.Contains(out, "You are not logged in.") {
+	if out := runLogout(t); !strings.Contains(out, "! You're not signed in") {
 		t.Fatalf("unexpected output: %q", out)
 	}
 }
@@ -38,7 +38,7 @@ func TestLogout_RemovesSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if out := runLogout(t); !strings.Contains(out, "Logged out user@example.com") {
+	if out := runLogout(t); !strings.Contains(out, "✓ Signed out user@example.com") {
 		t.Fatalf("unexpected output: %q", out)
 	}
 	if _, err := h.LoadLogin(); !errors.Is(err, auth.ErrNotLoggedIn) {
@@ -52,7 +52,7 @@ func TestLogout_CorruptSessionStillCleared(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if out := runLogout(t); !strings.Contains(out, "Logged out") {
+	if out := runLogout(t); !strings.Contains(out, "✓ Signed out") {
 		t.Fatalf("unexpected output: %q", out)
 	}
 	if _, err := auth.NewAuthHandler().LoadLogin(); !errors.Is(err, auth.ErrNotLoggedIn) {

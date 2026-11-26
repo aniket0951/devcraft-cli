@@ -4,29 +4,34 @@ import "time"
 
 // Assignment is a published assignment.
 type Assignment struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Language    string `json:"language"`
-	Category    string `json:"category"`
-	Difficulty  string `json:"difficulty"`
-	Version     int    `json:"version"`
-	Description string `json:"description,omitempty"`
+	Code           string `json:"assignment_code"` // e.g. GO-SRP-01; what `devcraft start` takes
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	Language       string `json:"language"`
+	CategoryName   string `json:"category_name"`
+	Level          string `json:"level"`
+	Label          string `json:"label,omitempty"`
+	CurrentVersion string `json:"current_version"` // semver, e.g. 1.0.0
 }
 
-// ListAssignmentsParams filters and paginates the assignment list. Zero
-// values are omitted from the request.
+// ListAssignmentsParams filters the assignment list. Empty fields are
+// omitted from the request.
 type ListAssignmentsParams struct {
-	Language   string
-	Category   string
-	Difficulty string
-	Cursor     string
-	Limit      int
+	Language string
+	Category string // category name, case-insensitive
+	Level    string
 }
 
-// AssignmentList is one page of assignments.
-type AssignmentList struct {
-	Items      []Assignment `json:"items"`
-	NextCursor string       `json:"next_cursor,omitempty"`
+// AssignmentDownload is a short-lived, pre-signed URL for an assignment's
+// starter ZIP. DownloadURL is a bearer capability: never print or log it.
+// The downloaded bytes must match SizeBytes and SHA256Hex.
+type AssignmentDownload struct {
+	AssignmentCode string    `json:"assignment_code"`
+	Version        string    `json:"version"` // semver, e.g. 1.0.0
+	DownloadURL    string    `json:"download_url"`
+	SizeBytes      int64     `json:"size_bytes"`
+	SHA256Hex      string    `json:"sha256_hex"`
+	ExpiresAt      time.Time `json:"expires_at"`
 }
 
 // Attempt is a user's attempt at one assignment version.

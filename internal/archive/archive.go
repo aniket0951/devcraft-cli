@@ -205,7 +205,7 @@ func Extract(r io.Reader, dest string, limits Limits) error {
 			if total > limits.MaxTotalBytes {
 				return fmt.Errorf("%w: archive expands to more than %d bytes", ErrLimitExceeded, limits.MaxTotalBytes)
 			}
-			if err := writeFile(target, tr, hdr); err != nil {
+			if err := writeFile(target, tr, hdr.Name, hdr.Size, hdr.Mode&0o111 != 0); err != nil {
 				return err
 			}
 		case tar.TypeXGlobalHeader:
@@ -216,12 +216,14 @@ func Extract(r io.Reader, dest string, limits Limits) error {
 	}
 }
 
-func writeFile(target string, r io.Reader, hdr *tar.Header) error {
+// writeFile creates target with exactly size bytes from r; name is the
+// archive entry name for error messages.
+func writeFile(target string, r io.Reader, name string, size int64, executable bool) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
 	mode := os.FileMode(0o644)
-	if hdr.Mode&0o111 != 0 {
+	if executable {
 		mode = 0o755
 	}
 	// O_EXCL: never overwrite (or write through) anything already present.
@@ -229,13 +231,13 @@ func writeFile(target string, r io.Reader, hdr *tar.Header) error {
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, io.LimitReader(r, hdr.Size+1))
+	n, err := io.Copy(f, io.LimitReader(r, size+1))
 	closeErr := f.Close()
 	if err != nil {
 		return err
 	}
-	if n != hdr.Size {
-		return fmt.Errorf("archive entry %q: size mismatch", hdr.Name)
+	if n != size {
+		return fmt.Errorf("archive entry %q: size mismatch", name)
 	}
 	return closeErr
 }
